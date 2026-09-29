@@ -1,21 +1,12 @@
-# Wieloetapowy build — w Bloku 2 pokazujemy, że warstwa z zależnościami
-# cache'uje się osobno od warstwy z kodem.
-FROM python:3.12-slim AS deps
+FROM python:alpine
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+COPY . .
 
-FROM python:3.12-slim
-WORKDIR /app
-COPY --from=deps /install /usr/local
-COPY main.py flags.py flags.json ./
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Nie root — Checkov i Trivy pytają o to jako pierwsze.
-RUN useradd -u 10001 -m app && chown -R app /app
-USER app
+ENV AWS_DEFAULT_REGION=eu-central-1
+ENV APP_SECRET_KEY=tymczasowy-klucz-do-podmiany-przed-produkcja
 
-ARG APP_VERSION=v1
-ENV APP_VERSION=${APP_VERSION}
 EXPOSE 8000
-HEALTHCHECK --interval=10s --timeout=3s CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn main:app --host 0.0.0.0 --port 8000
