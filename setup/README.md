@@ -107,7 +107,7 @@ Po instalacji uruchom ponownie `./setup/check-prereqs.sh` — nie powinno być n
 
 | Narzędzie | Min. wersja | Na maszynie | Instalacja |
 |---|---|---|---|
-| **TFLint** | 0.50 | ⬜ instalujesz | `curl -fsSL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh \| bash` |
+| **TFLint** | 0.50 | ⬜ instalujesz | `curl -sSLO https://github.com/terraform-linters/tflint/releases/latest/download/tflint_linux_amd64.zip && unzip tflint_linux_amd64.zip && sudo install -c -v tflint /usr/local/bin/ && rm tflint_linux_amd64.zip tflint` |
 | **Checkov** | 3.2 | ⬜ instalujesz | `sudo apt install -y pipx && pipx install checkov && pipx ensurepath` (potem otwórz nowy terminal) |
 | **Plugin Argo Rollouts** | — | ⬜ instalujesz | `curl -fsSLO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64 && sudo install kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts` |
 | **actionlint** | 1.7 | ⬜ instalujesz | `bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) && sudo mv actionlint /usr/local/bin/` |

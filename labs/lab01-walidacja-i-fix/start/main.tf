@@ -6,6 +6,10 @@ locals {
   prefix = "szkolenie-lab01-${var.uczestnik}"
 }
 
+data "aws_vpc" "istniejaca" {
+  id = var.vpc_id
+}
+
 resource "aws_s3_bucket" "logi" {
   bucket = "${local.prefix}-logs"
 
@@ -22,6 +26,16 @@ resource "aws_s3_bucket_versioning" "logi" {
 
   versioning_configuration {
     status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "logi" {
+  bucket = aws_s3_bucket.logi.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 
@@ -63,7 +77,7 @@ resource "aws_iam_role_policy" "kolektor" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["s3:PutObject", "s3:GetObject"]
-      Resource = "arn:aws:s3:::szkolenie-lab01-anna-k-logs/*"
+      Resource = "${aws_s3_bucket.logi.arn}/*"
     }]
   })
 }
@@ -78,7 +92,7 @@ resource "aws_security_group" "kolektor" {
     from_port   = 514
     to_port     = 514
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [data.aws_vpc.istniejaca.cidr_block]
   }
 
   egress {

@@ -1,0 +1,146 @@
+name: Deploy quotes-api (dzień 1)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/deploy.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: eu-central-1
+  EKS_CLUSTER: szkolenie-ai-devops
+  ECR_REPOSITORY: quotes-api
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Tylko czytanie kodu do lintowania — bez dostępu do AWS ani zapisu do repo.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: app/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+        working-directory: app
+      - run: ruff check .
+        working-directory: app
+
+  test:
+    name: Testy (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    # Tylko czytanie kodu do uruchomienia testów.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: app/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+        working-directory: app
+      - run: pytest -q
+        working-directory: app
+
+  build:
+    name: Build i push obrazu do ECR
+    needs: [lint, test]
+    # Obraz budujemy tylko z main — PR (także z forków) nigdy nie pcha do ECR.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # id-token: write tylko tutaj i w deployu — to jedyne joby, które rozmawiają z AWS.
+    # contents: read wystarcza do checkout, nie potrzebujemy zapisu do repo.
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Uwierzytelnienie do AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login do ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build i push (tag = SHA commita)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          build-args: |
+            APP_VERSION=${{ github.sha }}
+          tags: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Zapisz niezmienny identyfikator obrazu (digest)
+        id: image
+        run: |
+          echo "image=${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy na EKS
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # id-token: write — job łączy się z AWS (EKS). Brak `environment:`, żeby nie
+    # zmieniać tożsamości w tokenie OIDC (rola przyjmuje tokeny tylko z tego repo/gałęzi).
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Uwierzytelnienie do AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Konfiguracja kubeconfig dla klastra EKS
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
+
+      - name: Podmień obraz w manifeście (digest zbudowany w jobie build)
+        run: |
+          sed "s|PODMIEN_NA_OBRAZ|${{ needs.build.outputs.image }}|" \
+            app/k8s-dzien1/deployment.yaml > /tmp/deployment.yaml
+
+      - name: Zastosuj manifesty (zwykły Deployment, bez Argo Rollouts)
+        run: |
+          kubectl apply -n ${{ vars.K8S_NAMESPACE }} -f /tmp/deployment.yaml
+          kubectl apply -n ${{ vars.K8S_NAMESPACE }} -f app/k8s-dzien1/service.yaml
+
+      - name: Czekaj, aż Deployment będzie gotowy
+        run: |
+          kubectl rollout status deployment/quotes-api-d1 \
+            -n ${{ vars.K8S_NAMESPACE }} --timeout=180s
